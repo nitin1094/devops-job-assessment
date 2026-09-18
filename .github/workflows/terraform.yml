@@ -1,0 +1,180 @@
+name: terraform
+
+# Runs on every PR that touches infra/. fmt and validate need nothing but the
+# repository; plan needs AWS credentials, so it is gated on an OIDC role being
+# configured (see README, "Enabling the plan step"). Without that role the
+# workflow still runs and reports honestly that the plan was skipped, rather
+# than sitting red in the PR forever.
+
+on:
+  pull_request:
+    paths:
+      - 'infra/**'
+      - '.github/workflows/terraform.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write # OIDC: no long-lived AWS keys in repository secrets
+
+concurrency:
+  group: terraform-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: '1.15.5'
+  TF_IN_AUTOMATION: 'true'
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # -recursive so modules are checked too, not just the environments.
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff infra
+
+  plan:
+    name: plan (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    needs: fmt
+
+    strategy:
+      fail-fast: false # a broken dev should not hide the state of prod
+      matrix:
+        environment: [dev, prod]
+
+    defaults:
+      run:
+        working-directory: infra/envs/${{ matrix.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        if: vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: terraform-plan-${{ matrix.environment }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-south-1' }}
+
+      # No role configured -> swap the S3 backend for local state so that init
+      # and validate still exercise the real configuration.
+      - name: Use local state
+        if: vars.AWS_ROLE_ARN == ''
+        run: ../../../scripts/tf-local-backend.sh ${{ matrix.environment }}
+
+      - name: terraform init
+        run: terraform init -input=false
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      - name: terraform plan
+        id: plan
+        if: vars.AWS_ROLE_ARN != ''
+        run: |
+          terraform plan -no-color -input=false -refresh=false -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+          {
+            echo "summary<<PLAN_EOF"
+            grep -E '^(Plan:|No changes\.)' plan.txt || echo 'Plan: (no summary line)'
+            echo "PLAN_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # The binary plan is the artifact worth keeping -- plan.txt is for humans,
+      # tfplan is what an apply job would consume.
+      - name: Upload plan
+        if: steps.plan.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ matrix.environment }}
+          path: |
+            infra/envs/${{ matrix.environment }}/tfplan
+            infra/envs/${{ matrix.environment }}/plan.txt
+          retention-days: 5
+
+      - name: Comment plan on PR
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+          PLAN_RAN: ${{ steps.plan.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const env = process.env.ENVIRONMENT;
+            const marker = `<!-- terraform-plan:${env} -->`;
+            const planPath = `infra/envs/${env}/plan.txt`;
+
+            let body;
+            if (process.env.PLAN_RAN !== 'success') {
+              body = [
+                marker,
+                `### Terraform plan — \`${env}\` · skipped`,
+                '',
+                'No `AWS_ROLE_ARN` repository variable is set, so there are no credentials to plan with.',
+                '`terraform fmt`, `init` and `validate` ran against the real configuration.',
+                'See **Enabling the plan step** in the README to switch this on.',
+              ].join('\n');
+            } else {
+              let plan = fs.readFileSync(planPath, 'utf8');
+              // GitHub rejects comments over 65536 characters.
+              const limit = 60000;
+              const truncated = plan.length > limit;
+              if (truncated) {
+                plan = plan.slice(0, limit) + '\n\n... truncated, full plan is in the workflow artifacts ...';
+              }
+              body = [
+                marker,
+                `### Terraform plan — \`${env}\``,
+                '',
+                truncated ? '_Output truncated; the complete plan is attached as an artifact._' : '',
+                '<details><summary>Show plan</summary>',
+                '',
+                '```terraform',
+                plan,
+                '```',
+                '',
+                '</details>',
+              ].join('\n');
+            }
+
+            // Update the existing comment instead of adding one per push, so a
+            // long-running PR does not end up with twenty stale plans in it.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

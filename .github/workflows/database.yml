@@ -1,0 +1,69 @@
+name: database
+
+# End-to-end check of the local database stack: bring it up, back it up, throw
+# data away, restore it, and assert the restored copy matches the backup.
+#
+# This is the same sequence a reviewer runs by hand, which is the point --
+# if it passes here it passes on their laptop.
+
+on:
+  pull_request:
+    paths:
+      - 'db/**'
+      - 'scripts/**'
+      - 'docker-compose.yml'
+      - '.github/workflows/database.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup-restore:
+    name: backup and restore round-trip
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check shell scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -x -e SC1090,SC1091 scripts/*.sh
+
+      # --wait blocks until the healthcheck passes, which (because the
+      # healthcheck uses a TCP pg_isready) means migrations and seed are done.
+      - name: Start the database
+        run: docker compose up -d --wait
+
+      - name: Show what was seeded
+        run: |
+          ./scripts/psql.sh -c "SELECT count(*) AS hotel_bookings FROM hotel_bookings"
+          ./scripts/psql.sh -c "SELECT count(*) AS booking_events FROM booking_events"
+
+      - name: Query plans, with and without the index
+        run: ./scripts/explain.sh
+
+      - name: Take a backup
+        run: ./scripts/backup.sh
+
+      # Simulate the thing backups exist for.
+      - name: Destroy some data
+        run: |
+          ./scripts/psql.sh -c "DELETE FROM hotel_bookings WHERE city = 'delhi'"
+          ./scripts/psql.sh -c "SELECT count(*) AS remaining FROM hotel_bookings"
+
+      # restore.sh compares the restored database against the fingerprint stored
+      # alongside the dump and exits non-zero on any mismatch, so this step is
+      # the assertion -- no extra checking needed.
+      - name: Restore into a fresh database and verify
+        run: ./scripts/restore.sh
+
+      - name: Restore over the live database
+        run: |
+          ./scripts/restore.sh --replace --yes
+          ./scripts/psql.sh -c "SELECT count(*) AS restored FROM hotel_bookings WHERE city = 'delhi'"
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
