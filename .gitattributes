@@ -1,0 +1,9 @@
+* text=auto eol=lf
+
+# These are executed on Linux/macOS by the reviewer. CRLF would break the
+# shebang, so pin them regardless of the author's core.autocrlf setting.
+*.sh   text eol=lf
+*.sql  text eol=lf
+*.tf   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf

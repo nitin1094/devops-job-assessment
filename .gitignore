@@ -1,0 +1,25 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.txt
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Environment-specific secrets. *.tfvars is committed on purpose here (the
+# values are sizing knobs, not credentials) -- secret values go in
+# *.auto.tfvars / *.secret.tfvars, which are not.
+*.auto.tfvars
+*.secret.tfvars
+
+# Local runtime
+.env
+backups/*
+!backups/.gitkeep
