@@ -1,0 +1,49 @@
+name: devops-assessment
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: bookings-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bookings}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bookings_local_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-bookings}
+      # Deterministic collation, so ORDER BY / index behaviour matches RDS
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      # Deliberately not 5432 -- a lot of laptops already have Postgres or
+      # pgAdmin holding that port. Override with POSTGRES_PORT in .env.
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Everything in /docker-entrypoint-initdb.d runs once, in filename order,
+      # the first time the data directory is initialised.
+      - ./db/migrations/0001_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./db/migrations/0002_indexes.sql:/docker-entrypoint-initdb.d/02_indexes.sql:ro
+      - ./db/seed/0003_seed.sql:/docker-entrypoint-initdb.d/03_seed.sql:ro
+      # read-only mount so `psql -f /db/queries/analytics.sql` works in-container
+      - ./db:/db:ro
+    healthcheck:
+      # -h 127.0.0.1 matters: while the entrypoint is running the migration and
+      # seed files it starts a temporary server bound to the unix socket only.
+      # A socket-based pg_isready reports "ready" mid-seed; a TCP one does not.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-bookings} -d ${POSTGRES_DB:-bookings} -q"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  # Optional web UI: docker compose --profile tools up -d adminer  ->  localhost:8080
+  adminer:
+    image: adminer:4
+    profiles: ["tools"]
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
