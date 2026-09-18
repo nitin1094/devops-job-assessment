@@ -278,6 +278,7 @@ On first boot, `/docker-entrypoint-initdb.d` runs three files in order:
 | `db/migrations/0001_schema.sql` | `hotel_bookings`, `booking_events` |
 | `db/migrations/0002_indexes.sql` | the reporting index and the FK index |
 | `db/seed/0003_seed.sql` | 20,000 bookings and roughly 16,000 events |
+| `db/migrations/0004_pg_stat_statements.sql` | the `pg_stat_statements` extension |
 
 Those files only run when the data directory is empty. To start over:
 `docker compose down -v && docker compose up -d --wait`. To reset the data
@@ -287,6 +288,15 @@ The healthcheck runs `pg_isready -h 127.0.0.1` rather than over the unix socket.
 That detail matters: while the entrypoint is running the migration and seed files
 it starts a *temporary* server bound to the socket only. A socket-based check
 reports "ready" mid-seed, and everything downstream races it.
+
+`shared_preload_libraries=pg_stat_statements` is set on the container command
+line, because that setting can only be changed at server start. The RDS
+parameter group sets the same value, so a query investigated locally behaves the
+way it will in RDS. To see what is actually costing time:
+
+```bash
+./scripts/psql.sh -f /db/queries/slow_queries.sql
+```
 
 ### Schema notes
 

@@ -65,6 +65,14 @@ resource "aws_db_parameter_group" "this" {
     apply_method = "pending-reboot"
   }
 
+  # 'top' (the default) only records top-level statements, which hides anything
+  # running inside a function or a trigger. 'all' costs a little more overhead
+  # and is what makes the numbers trustworthy.
+  parameter {
+    name  = "pg_stat_statements.track"
+    value = "all"
+  }
+
   tags = local.tags
 
   lifecycle {
