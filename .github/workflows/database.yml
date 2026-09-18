@@ -26,10 +26,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned rather than apt-installed. The distro package moves with the
+      # runner image, so an unpinned linter can fail a commit that changed
+      # nothing -- which is exactly what happened here: 0.9.0 raises SC2119 on a
+      # pattern 0.11.0 accepts, and the two disagreed across a green local run
+      # and a red CI one.
       - name: Check shell scripts
+        env:
+          SHELLCHECK_VERSION: v0.10.0
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck -x -e SC1090,SC1091 scripts/*.sh
+          base=https://github.com/koalaman/shellcheck/releases/download
+          tarball=shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz
+          curl -fsSL "$base/${SHELLCHECK_VERSION}/$tarball" | tar -xJ -C /tmp
+          shellcheck=/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck
+          "$shellcheck" --version
+          "$shellcheck" -x -e SC1090,SC1091 scripts/*.sh
 
       # --wait blocks until the healthcheck passes, which (because the
       # healthcheck uses a TCP pg_isready) means migrations and seed are done.

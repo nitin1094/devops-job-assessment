@@ -4,6 +4,15 @@ services:
   db:
     image: postgres:16-alpine
     container_name: bookings-db
+    # shared_preload_libraries can only be set at server start, not with SET or
+    # ALTER SYSTEM, so it has to go here rather than in a migration. RDS sets the
+    # same value through its parameter group.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bookings}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bookings_local_pw}
@@ -21,6 +30,7 @@ services:
       - ./db/migrations/0001_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
       - ./db/migrations/0002_indexes.sql:/docker-entrypoint-initdb.d/02_indexes.sql:ro
       - ./db/seed/0003_seed.sql:/docker-entrypoint-initdb.d/03_seed.sql:ro
+      - ./db/migrations/0004_pg_stat_statements.sql:/docker-entrypoint-initdb.d/04_pg_stat_statements.sql:ro
       # read-only mount so `psql -f /db/queries/analytics.sql` works in-container
       - ./db:/db:ro
     healthcheck:

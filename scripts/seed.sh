@@ -30,7 +30,7 @@ wait_for_db
 for file in \
     "$REPO_ROOT/db/migrations/0001_schema.sql" \
     "$REPO_ROOT/db/migrations/0002_indexes.sql" \
-    "$REPO_ROOT/db/seed/0003_seed.sql"
+    "$REPO_ROOT/db/seed/0003_seed.sql"     "$REPO_ROOT/db/migrations/0004_pg_stat_statements.sql"
 do
     log "applying $(basename "$file") -> $TARGET_DB"
     db_run psql -v ON_ERROR_STOP=1 --username="$POSTGRES_USER" --dbname="$TARGET_DB" --quiet -f - < "$file"

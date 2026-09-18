@@ -22,6 +22,8 @@ POSTGRES_DB="${POSTGRES_DB:-bookings}"
 DB_SERVICE="${DB_SERVICE:-db}"
 BACKUP_DIR="${BACKUP_DIR:-$REPO_ROOT/backups}"
 BACKUP_RETENTION="${BACKUP_RETENTION:-7}"
+# How many times wait_for_db polls before giving up; each attempt sleeps 2s.
+DB_WAIT_RETRIES="${DB_WAIT_RETRIES:-60}"
 
 if [ -t 2 ]; then
     C_BLUE=$'\033[34m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'; C_OFF=$'\033[0m'
@@ -46,7 +48,9 @@ fi
 
 compose() {
     [ -n "$COMPOSE_CMD" ] || die "docker compose not found on PATH -- install Docker Desktop or the compose plugin"
-    # shellcheck disable=SC2086 -- COMPOSE_CMD is intentionally word-split
+    # COMPOSE_CMD holds either "docker compose" or "docker-compose", so the
+    # word splitting below is deliberate.
+    # shellcheck disable=SC2086
     ( cd "$REPO_ROOT" && $COMPOSE_CMD "$@" )
 }
 
@@ -63,7 +67,7 @@ db_query() {
 }
 
 wait_for_db() {
-    local tries="${1:-60}" i
+    local i
 
     compose ps --status running "$DB_SERVICE" >/dev/null 2>&1 || true
     if [ -z "$(compose ps -q "$DB_SERVICE" 2>/dev/null)" ]; then
@@ -71,7 +75,7 @@ wait_for_db() {
     fi
 
     log "waiting for postgres to accept TCP connections"
-    for ((i = 1; i <= tries; i++)); do
+    for ((i = 1; i <= DB_WAIT_RETRIES; i++)); do
         # -h 127.0.0.1 on purpose: during first boot the entrypoint runs the
         # migration/seed files against a temporary server that listens on the
         # unix socket only. A socket pg_isready would report "ready" while the
@@ -82,7 +86,7 @@ wait_for_db() {
         fi
         sleep 2
     done
-    die "postgres was not ready after $((tries * 2))s"
+    die "postgres was not ready after $((DB_WAIT_RETRIES * 2))s"
 }
 
 # A cheap content fingerprint, used to prove a restore actually round-tripped.
