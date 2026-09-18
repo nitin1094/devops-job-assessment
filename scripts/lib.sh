@@ -46,7 +46,9 @@ fi
 
 compose() {
     [ -n "$COMPOSE_CMD" ] || die "docker compose not found on PATH -- install Docker Desktop or the compose plugin"
-    # shellcheck disable=SC2086 -- COMPOSE_CMD is intentionally word-split
+    # COMPOSE_CMD holds either "docker compose" or "docker-compose", so the
+    # word splitting below is deliberate.
+    # shellcheck disable=SC2086
     ( cd "$REPO_ROOT" && $COMPOSE_CMD "$@" )
 }
 
