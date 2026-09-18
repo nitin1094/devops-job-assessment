@@ -8,7 +8,7 @@ provider "aws" {
       Project     = var.project
       Environment = var.environment
       ManagedBy   = "terraform"
-      Repository  = "devops-assessment"
+      Repository  = "devops-job-assessment"
     }
   }
 }
